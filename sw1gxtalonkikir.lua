@@ -1,570 +1,1129 @@
+-- language: Lua, file: LeoHUB_Exploit.lua
+-- *LeoHUB Exploit Edition — Author: LeoXD*
+-- *Fitur: Noclip, Fly, Speed, Teleport, ESP, Copy Avatar, Copy Map,
+--         Spawn Item, Remote Flood, Silent Aim, Aimbot, Auto SkillCheck*
+-- *Catatan: DDoS tidak mungkin dari client Lua. Remote Flood efeknya lokal.*
 
+-- ================== SERVICES ==================
+local Players              = game:GetService("Players")
+local RunService           = game:GetService("RunService")
+local ReplicatedStorage    = game:GetService("ReplicatedStorage")
+local UserInputService     = game:GetService("UserInputService")
+local Lighting             = game:GetService("Lighting")
+local TweenService         = game:GetService("TweenService")
+local Workspace            = game:GetService("Workspace")
+local VirtualInputManager  = game:GetService("VirtualInputManager")
+local HttpService          = game:GetService("HttpService")
+local Camera               = Workspace.CurrentCamera
+local LocalPlayer          = Players.LocalPlayer
 
--- ====== CRITICAL DEPENDENCY VALIDATION ======
-local success, errorMsg = pcall(function()
-    local services = {
-        game = game,
-        workspace = workspace,
-        Players = game:GetService("Players"),
-        RunService = game:GetService("RunService"),
-        ReplicatedStorage = game:GetService("ReplicatedStorage"),
-        HttpService = game:GetService("HttpService")
-    }
+-- ================== CONFIG ==================
+local CONFIG = {
+    -- Movement
+    walk_speed        = 45,
+    jump_power        = 60,
+    fly_enabled       = false,
+    fly_speed         = 80,
+    noclip_enabled    = false,
+    infinite_jump     = false,
     
-    for serviceName, service in pairs(services) do
-        if not service then
-            error("Critical service missing: " .. serviceName)
+    -- ESP
+    esp_enabled       = true,
+    esp_refresh       = 0.4,
+    esp_survivor      = Color3.fromRGB(0, 255, 100),
+    esp_killer        = Color3.fromRGB(255, 60, 60),
+    esp_generator     = Color3.fromRGB(0, 200, 255),
+    esp_item          = Color3.fromRGB(255, 200, 0),
+    
+    -- Combat
+    aimbot_enabled    = false,
+    aimbot_fov        = 200,
+    aimbot_smooth     = 0.25,
+    silent_aim        = false,
+    auto_dagger       = false,
+    auto_dagger_range = 12,
+    auto_dagger_cd    = 0.5,
+    
+    -- SkillCheck
+    auto_skillcheck   = false,
+    skillcheck_perfect= true,
+    
+    -- Flood
+    flood_enabled     = false,
+    flood_rate        = 30,
+    
+    -- Visual
+    full_bright       = true,
+    no_fog            = true,
+}
+
+-- ================== STATE ==================
+local State = {
+    fly_conn     = nil,
+    fly_bv       = nil,
+    noclip_conn  = nil,
+    silent_target= nil,
+    silent_hooked= false,
+    last_dagger  = 0,
+    flood_count  = 0,
+    teleport_list= {},
+}
+
+-- ================== REMOTE SCAN ==================
+local RemoteCache = {}
+local function scanRemotes()
+    RemoteCache = {}
+    for _, obj in ipairs(ReplicatedStorage:GetDescendants()) do
+        if obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
+            table.insert(RemoteCache, obj)
         end
     end
-    
-    local LocalPlayer = game:GetService("Players").LocalPlayer
-    if not LocalPlayer then
-        error("LocalPlayer not available")
-    end
-    
-    return true
-end)
-
-if not success then
-    error("âŒ [Auto Fish] Critical dependency check failed: " .. tostring(errorMsg))
-    return
+    print(("[LeoHUB] Cached %d remotes"):format(#RemoteCache))
 end
+scanRemotes()
 
--- ====================================================================
---                        CORE SERVICES
--- ====================================================================
-local Players = game:GetService("Players")
-local RunService = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local HttpService = game:GetService("HttpService")
-local VirtualUser = game:GetService("VirtualUser")
-local LocalPlayer = Players.LocalPlayer
-
--- ====================================================================
---                    CONFIGURATION
--- ====================================================================
-local CONFIG_FOLDER = "OptimizedAutoFish"
-local CONFIG_FILE = CONFIG_FOLDER .. "/config_" .. LocalPlayer.UserId .. ".json"
-
-local DefaultConfig = {
-    AutoFish = false,
-    AutoSell = false,
-    AutoCatch = false,
-    GPUSaver = false,
-    BlatantMode = false,
-    FishDelay = 0.9,
-    CatchDelay = 0.2,
-    SellDelay = 30,
-    TeleportLocation = "Sisyphus Statue",
-    AutoFavorite = true,
-    FavoriteRarity = "Mythic"
-}
-
-local Config = {}
-for k, v in pairs(DefaultConfig) do Config[k] = v end
-
--- Teleport Locations (COMPLETE LIST)
-local LOCATIONS = {
-    ["Spawn"] = CFrame.new(45.2788086, 252.562927, 2987.10913, 1, 0, 0, 0, 1, 0, 0, 0, 1),
-    ["Sisyphus Statue"] = CFrame.new(-3728.21606, -135.074417, -1012.12744, -0.977224171, 7.74980258e-09, -0.212209702, 1.566994e-08, 1, -3.5640408e-08, 0.212209702, -3.81539813e-08, -0.977224171),
-    ["Coral Reefs"] = CFrame.new(-3114.78198, 1.32066584, 2237.52295, -0.304758579, 1.6556676e-08, -0.952429652, -8.50574935e-08, 1, 4.46003305e-08, 0.952429652, 9.46036067e-08, -0.304758579),
-    ["Esoteric Depths"] = CFrame.new(3248.37109, -1301.53027, 1403.82727, -0.920208454, 7.76270355e-08, 0.391428679, 4.56261056e-08, 1, -9.10549289e-08, -0.391428679, -6.5930152e-08, -0.920208454),
-    ["Crater Island"] = CFrame.new(1016.49072, 20.0919304, 5069.27295, 0.838976264, 3.30379857e-09, -0.544168055, 2.63538391e-09, 1, 1.01344115e-08, 0.544168055, -9.93662219e-09, 0.838976264),
-    ["Lost Isle"] = CFrame.new(-3618.15698, 240.836655, -1317.45801, 1, 0, 0, 0, 1, 0, 0, 0, 1),
-    ["Weather Machine"] = CFrame.new(-1488.51196, 83.1732635, 1876.30298, 1, 0, 0, 0, 1, 0, 0, 0, 1),
-    ["Tropical Grove"] = CFrame.new(-2095.34106, 197.199997, 3718.08008),
-    ["Mount Hallow"] = CFrame.new(2136.62305, 78.9163895, 3272.50439, -0.977613986, -1.77645827e-08, 0.210406482, -2.42338203e-08, 1, -2.81680421e-08, -0.210406482, -3.26364251e-08, -0.977613986),
-    ["Treasure Room"] = CFrame.new(-3606.34985, -266.57373, -1580.97339, 0.998743415, 1.12141152e-13, -0.0501160324, -1.56847693e-13, 1, -8.88127842e-13, 0.0501160324, 8.94872392e-13, 0.998743415),
-    ["Kohana"] = CFrame.new(-663.904236, 3.04580712, 718.796875, -0.100799225, -2.14183729e-08, -0.994906783, -1.12300391e-08, 1, -2.03902459e-08, 0.994906783, 9.11752096e-09, -0.100799225),
-    ["Underground Cellar"] = CFrame.new(2109.52148, -94.1875076, -708.609131, 0.418592364, 3.34794485e-08, -0.908174217, -5.24141512e-08, 1, 1.27060247e-08, 0.908174217, 4.22825366e-08, 0.418592364),
-    ["TALON AJG KASIH ELMAJA"] = CFrame.new(1831.71362, 6.62499952, -299.279175, 0.213522509, 1.25553285e-07, -0.976938128, -4.32026184e-08, 1, 1.19074642e-07, 0.976938128, 1.67811702e-08, 0.213522509),
-    ["Sacred Temple"] = CFrame.new(1466.92151, -21.8750591, -622.835693, -0.764787138, 8.14444334e-09, 0.644283056, 2.31097452e-08, 1, 1.4791004e-08, -0.644283056, 2.6201187e-08, -0.764787138)
-}
-
--- ====================================================================
---                     CONFIG FUNCTIONS
--- ====================================================================
-local function ensureFolder()
-    if not isfolder or not makefolder then return false end
-    if not isfolder(CONFIG_FOLDER) then
-        pcall(function() makefolder(CONFIG_FOLDER) end)
-    end
-    return isfolder(CONFIG_FOLDER)
-end
-
-local function saveConfig()
-    if not writefile or not ensureFolder() then return end
+-- ================== HELPER ==================
+local function notify(title, msg)
     pcall(function()
-        writefile(CONFIG_FILE, HttpService:JSONEncode(Config))
-        print("[Config] Settings saved!")
+        game:GetService("StarterGui"):SetCore("SendNotification", {
+            Title = title or "LeoHUB",
+            Text = msg or "",
+            Duration = 3,
+        })
     end)
 end
 
-local function loadConfig()
-    if not readfile or not isfile or not isfile(CONFIG_FILE) then return end
-    pcall(function()
-        local data = HttpService:JSONDecode(readfile(CONFIG_FILE))
-        for k, v in pairs(data) do
-            if DefaultConfig[k] ~= nil then Config[k] = v end
-        end
-        print("[Config] Settings loaded!")
-    end)
+local function getChar()
+    return LocalPlayer.Character or LocalPlayer.CharacterAdded:Wait()
 end
 
-loadConfig()
-
--- ====================================================================
---                     NETWORK EVENTS
--- ====================================================================
-local function getNetworkEvents()
-    local net = ReplicatedStorage.Packages._Index["sleitnick_net@0.2.0"].net
-    return {
-        fishing = net:WaitForChild("RE/FishingCompleted"),
-        sell = net:WaitForChild("RF/SellAllItems"),
-        charge = net:WaitForChild("RF/ChargeFishingRod"),
-        minigame = net:WaitForChild("RF/RequestFishingMinigameStarted"),
-        cancel = net:WaitForChild("RF/CancelFishingInputs"),
-        equip = net:WaitForChild("RE/EquipToolFromHotbar"),
-        unequip = net:WaitForChild("RE/UnequipToolFromHotbar"),
-        favorite = net:WaitForChild("RE/FavoriteItem")
-    }
+local function getHum()
+    local c = getChar()
+    return c and c:FindFirstChildOfClass("Humanoid")
 end
 
-local Events = getNetworkEvents()
-
--- ====================================================================
---                     MODULES FOR AUTO FAVORITE
--- ====================================================================
-local ItemUtility = require(ReplicatedStorage.Shared.ItemUtility)
-local Replion = require(ReplicatedStorage.Packages.Replion)
-local PlayerData = Replion.Client:WaitReplion("Data")
-
--- ====================================================================
---                     RARITY SYSTEM
--- ====================================================================
-local RarityTiers = {
-    Common = 1,
-    Uncommon = 2,
-    Rare = 3,
-    Epic = 4,
-    Legendary = 5,
-    Mythic = 6,
-    Secret = 7
-}
-
-local function getRarityValue(rarity)
-    return RarityTiers[rarity] or 0
-end
-
-local function getFishRarity(itemData)
-    if not itemData or not itemData.Data then return "Common" end
-    return itemData.Data.Rarity or "Common"
-end
-
-local Teleport = {}
-
-function Teleport.to(locationName)
-    local cframe = LOCATIONS[locationName]
-    if not cframe then
-        warn("âŒ [Teleport] Location not found: " .. tostring(locationName))
-        return false
-    end
-    
-    local success = pcall(function()
-        local character = LocalPlayer.Character
-        if not character then return end
-        
-        local rootPart = character:FindFirstChild("HumanoidRootPart")
-        if not rootPart then return end
-        
-        rootPart.CFrame = cframe
-        print("âœ… [Teleport] Moved to " .. locationName)
-    end)
-    
-    return success
-end
-
--- ====================================================================
---                     GPU SAVER
--- ====================================================================
-local gpuActive = false
-local whiteScreen = nil
-
-local function enableGPU()
-    if gpuActive then return end
-    gpuActive = true
-    
-    pcall(function()
-        settings().Rendering.QualityLevel = Enum.QualityLevel.Level01
-        game.Lighting.GlobalShadows = false
-        game.Lighting.FogEnd = 1
-        setfpscap(8)
-    end)
-    
-    whiteScreen = Instance.new("ScreenGui")
-    whiteScreen.ResetOnSpawn = false
-    whiteScreen.DisplayOrder = 999999
-    
-    local frame = Instance.new("Frame")
-    frame.Size = UDim2.new(1, 0, 1, 0)
-    frame.BackgroundColor3 = Color3.new(0.1, 0.1, 0.1)
-    frame.Parent = whiteScreen
-    
-    local label = Instance.new("TextLabel")
-    label.Size = UDim2.new(0, 400, 0, 100)
-    label.Position = UDim2.new(0.5, -200, 0.5, -50)
-    label.BackgroundTransparency = 1
-    label.Text = "ðŸŸ¢ GPU SAVER ACTIVE\n\nAuto Fish Running..."
-    label.TextColor3 = Color3.new(0, 1, 0)
-    label.TextSize = 28
-    label.Font = Enum.Font.GothamBold
-    label.TextXAlignment = Enum.TextXAlignment.Center
-    label.Parent = frame
-    
-    whiteScreen.Parent = game.CoreGui
-    print("[GPU] GPU Saver enabled")
-end
-
-local function disableGPU()
-    if not gpuActive then return end
-    gpuActive = false
-    
-    pcall(function()
-        settings().Rendering.QualityLevel = Enum.QualityLevel.Automatic
-        game.Lighting.GlobalShadows = true
-        game.Lighting.FogEnd = 100000
-        setfpscap(0)
-    end)
-    
-    if whiteScreen then
-        whiteScreen:Destroy()
-        whiteScreen = nil
-    end
-    print("[GPU] GPU Saver disabled")
-end
-
--- ====================================================================
---                     ANTI-AFK
--- ====================================================================
-LocalPlayer.Idled:Connect(function()
-    VirtualUser:CaptureController()
-    VirtualUser:ClickButton2(Vector2.new())
-end)
-
-print("[Anti-AFK] Protection enabled")
-
--- ====================================================================
---                     AUTO FAVORITE
--- ====================================================================
-local favoritedItems = {}
-
-local function isItemFavorited(uuid)
-    local success, result = pcall(function()
-        local items = PlayerData:GetExpect("Inventory").Items
-        for _, item in ipairs(items) do
-            if item.UUID == uuid then
-                return item.Favorited == true
+-- ================== NOCLIP ==================
+local function toggleNoclip(state)
+    CONFIG.noclip_enabled = state
+    if state then
+        State.noclip_conn = RunService.Stepped:Connect(function()
+            if not CONFIG.noclip_enabled then return end
+            local c = getChar()
+            if not c then return end
+            for _, part in ipairs(c:GetDescendants()) do
+                if part:IsA("BasePart") and part.CanCollide then
+                    part.CanCollide = false
+                end
+            end
+        end)
+    else
+        if State.noclip_conn then State.noclip_conn:Disconnect() end
+        local c = getChar()
+        if c then
+            for _, part in ipairs(c:GetDescendants()) do
+                if part:IsA("BasePart") then part.CanCollide = true end
             end
         end
-        return false
-    end)
-    return success and result or false
+    end
 end
 
-local function autoFavoriteByRarity()
-    if not Config.AutoFavorite then return end
+-- ================== FLY ==================
+local function toggleFly(state)
+    CONFIG.fly_enabled = state
+    local char = getChar()
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
     
-    local targetRarity = Config.FavoriteRarity
-    local targetValue = getRarityValue(targetRarity)
-    
-    if targetValue < 6 then
-        targetValue = 6
+    if state then
+        local bv = Instance.new("BodyVelocity")
+        bv.Name = "LeoHUB_Fly"
+        bv.MaxForce = Vector3.new(1e5, 1e5, 1e5)
+        bv.Velocity = Vector3.zero
+        bv.Parent = hrp
+        State.fly_bv = bv
+        
+        State.fly_conn = RunService.RenderStepped:Connect(function()
+            if not CONFIG.fly_enabled then return end
+            local cam = Camera.CFrame
+            local move = Vector3.zero
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then move += cam.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then move -= cam.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then move -= cam.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then move += cam.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.Space) then move += Vector3.new(0,1,0) end
+            if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then move -= Vector3.new(0,1,0) end
+            if move.Magnitude > 0 then
+                move = move.Unit * CONFIG.fly_speed
+            end
+            if State.fly_bv then
+                State.fly_bv.Velocity = move
+            end
+        end)
+    else
+        if State.fly_conn then State.fly_conn:Disconnect() end
+        if State.fly_bv then State.fly_bv:Destroy() end
+        State.fly_conn = nil
+        State.fly_bv = nil
+    end
+end
+
+-- ================== INFINITE JUMP ==================
+local function toggleInfJump(state)
+    CONFIG.infinite_jump = state
+end
+
+UserInputService.JumpRequest:Connect(function()
+    if not CONFIG.infinite_jump then return end
+    local hum = getHum()
+    if hum then hum:ChangeState(Enum.HumanoidStateType.Jumping) end
+end)
+
+-- ================== TELEPORT ==================
+local function teleportTo(pos)
+    local hrp = getChar() and getChar():FindFirstChild("HumanoidRootPart")
+    if hrp then
+        hrp.CFrame = CFrame.new(pos)
+    end
+end
+
+local function teleportToPlayer(targetName)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p.Name:lower() == targetName:lower() and p.Character then
+            local hrp = p.Character:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                teleportTo(hrp.Position + Vector3.new(0, 3, 0))
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- ================== COPY AVATAR VISUAL ==================
+local function copyAvatar(target)
+    if not target or not target.Character then return end
+    local myChar = getChar()
+    if not myChar then return end
+    for _, v in ipairs(myChar:GetChildren()) do
+        if v:IsA("Accessory") or v:IsA("Shirt") or v:IsA("Pants")
+           or v:IsA("BodyColors") or v:IsA("CharacterMesh") then
+            pcall(function() v:Destroy() end)
+        end
+    end
+    for _, v in ipairs(target.Character:GetChildren()) do
+        if v:IsA("Accessory") or v:IsA("Shirt") or v:IsA("Pants")
+           or v:IsA("BodyColors") or v:IsA("CharacterMesh") then
+            pcall(function() v:Clone().Parent = myChar end)
+        end
+    end
+    local myHum = myChar:FindFirstChildOfClass("Humanoid")
+    local tgtHum = target.Character:FindFirstChildOfClass("Humanoid")
+    if myHum and tgtHum then
+        for _, desc in ipairs(tgtHum:GetDescendants()) do
+            if desc:IsA("NumberValue") then
+                local mine = myHum:FindFirstChild(desc.Name)
+                if mine then mine.Value = desc.Value end
+            end
+        end
+    end
+    notify("LeoHUB", "Avatar copied from " .. target.Name)
+end
+
+-- ================== COPY MAP (DUMP STRUCTURE) ==================
+local function copyMap()
+    -- Dump struktur Workspace ke JSON, simpan sebagai string
+    -- Tidak bisa "copy" ke server lain — hanya untuk analisis
+    local function dump(inst, depth)
+        if depth > 6 then return nil end  -- Limit depth
+        local data = {
+            name = inst.Name,
+            class = inst.ClassName,
+            children = {},
+        }
+        for _, child in ipairs(inst:GetChildren()) do
+            local sub = dump(child, depth + 1)
+            if sub then table.insert(data.children, sub) end
+        end
+        return data
     end
     
-    local favorited = 0
-    local skipped = 0
+    local ok, json = pcall(function()
+        return HttpService:JSONEncode(dump(Workspace, 0))
+    end)
     
-    local success = pcall(function()
-        local items = PlayerData:GetExpect("Inventory").Items
-        
-        if not items or #items == 0 then return end
-        
-        for i, item in ipairs(items) do
-            local data = ItemUtility:GetItemData(item.Id)
-            if data and data.Data then
-                local itemName = data.Data.Name or "Unknown"
-                local rarity = getFishRarity(data)
-                local rarityValue = getRarityValue(rarity)
-                
-                if rarityValue >= targetValue and rarityValue >= 6 then
-                    if not isItemFavorited(item.UUID) and not favoritedItems[item.UUID] then
-                        Events.favorite:FireServer(item.UUID)
-                        favoritedItems[item.UUID] = true
-                        favorited = favorited + 1
-                        print("[Auto Favorite] â­ #" .. favorited .. " - " .. itemName .. " (" .. rarity .. ")")
-                        task.wait(0.3)
-                    else
-                        skipped = skipped + 1
+    if ok then
+        -- Simpan ke file
+        local filename = "LeoHUB_MapDump_" .. os.time() .. ".json"
+        pcall(function()
+            writefile(filename, json)
+        end)
+        notify("LeoHUB", "Map dumped: " .. filename .. " (" .. #json .. " bytes)")
+        print("[LeoHUB] Map dump saved:", filename)
+    else
+        notify("LeoHUB", "Map dump failed")
+    end
+end
+
+-- ================== SPAWN ITEM ==================
+local function spawnItem(itemName)
+    -- Cari item di ReplicatedStorage/ServerStorage, clone ke Backpack
+    local searchRoots = { ReplicatedStorage, game:GetService("ServerStorage") }
+    for _, root in ipairs(searchRoots) do
+        local found = root:FindFirstChild(itemName, true)
+        if found and (found:IsA("Tool") or found:IsA("Accessory")) then
+            local backpack = LocalPlayer:FindFirstChild("Backpack")
+            if backpack then
+                pcall(function()
+                    found:Clone().Parent = backpack
+                    notify("LeoHUB", "Spawned: " .. itemName)
+                end)
+                return true
+            end
+        end
+    end
+    notify("LeoHUB", "Item not found: " .. itemName)
+    return false
+end
+
+-- ================== ESP ==================
+local function createESPTag(part, text, color)
+    local existing = part:FindFirstChild("LeoHUB_ESP")
+    if existing then existing:Destroy() end
+    local gui = Instance.new("BillboardGui")
+    gui.Name = "LeoHUB_ESP"
+    gui.Size = UDim2.new(0, 180, 0, 40)
+    gui.StudsOffset = Vector3.new(0, 3, 0)
+    gui.Adornee = part
+    gui.AlwaysOnTop = true
+    gui.Parent = part
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = text
+    lbl.TextColor3 = color
+    lbl.TextStrokeTransparency = 0
+    lbl.TextScaled = true
+    lbl.Font = Enum.Font.GothamBold
+    lbl.Parent = gui
+end
+
+local function getRole(player)
+    if player == LocalPlayer then return "self" end
+    if player.Team then
+        local t = player.Team.Name:lower()
+        if t:find("killer") or t:find("murder") then return "killer" end
+        if t:find("survivor") or t:find("surv") then return "survivor" end
+    end
+    local ls = player:FindFirstChild("leaderstats")
+    if ls then
+        for _, v in ipairs(ls:GetChildren()) do
+            local n = v.Name:lower()
+            if n:find("role") or n:find("team") then
+                local val = tostring(v.Value):lower()
+                if val:find("killer") then return "killer" end
+                if val:find("survivor") then return "survivor" end
+            end
+        end
+    end
+    return "unknown"
+end
+
+local function updateESP()
+    if not CONFIG.esp_enabled then return end
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        local c = p.Character
+        if not c then continue end
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        local head = c:FindFirstChild("Head")
+        if not head then continue end
+        local role = getRole(p)
+        local color = (role == "killer") and CONFIG.esp_killer or CONFIG.esp_survivor
+        createESPTag(head, role:upper() .. " | " .. p.Name .. " [" .. math.floor(hum.Health) .. "]", color)
+    end
+    for _, obj in ipairs(Workspace:GetDescendants()) do
+        local n = obj.Name:lower()
+        if (n:find("generator") or n:find("gen")) and obj:IsA("Model") then
+            local pp = obj.PrimaryPart or obj:FindFirstChildWhichIsA("BasePart")
+            if pp then createESPTag(pp, "[GEN]", CONFIG.esp_generator) end
+        elseif (n:find("gun") or n:find("weapon") or n:find("dagger") or n:find("item")) 
+               and obj:IsA("Tool") then
+            local handle = obj:FindFirstChild("Handle")
+            if handle then createESPTag(handle, "[ITEM]", CONFIG.esp_item) end
+        end
+    end
+end
+
+-- ================== COMBAT ==================
+local function getClosest(maxDist, partName, onlyEnemy)
+    local closest, cd = nil, maxDist
+    local myPos = Camera.CFrame.Position
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        if onlyEnemy and getRole(p) == "survivor" then continue end
+        local c = p.Character
+        if not c then continue end
+        local hum = c:FindFirstChildOfClass("Humanoid")
+        if not hum or hum.Health <= 0 then continue end
+        local part = c:FindFirstChild(partName) or c:FindFirstChild("HumanoidRootPart")
+        if not part then continue end
+        local d = (part.Position - myPos).Magnitude
+        if d < cd then closest = part; cd = d end
+    end
+    return closest
+end
+
+local function aimbotLoop()
+    if not CONFIG.aimbot_enabled then return end
+    if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2) then return end
+    local target = getClosest(CONFIG.aimbot_fov, "Head", true)
+    if not target then return end
+    Camera.CFrame = Camera.CFrame:Lerp(CFrame.new(Camera.CFrame.Position, target.Position), CONFIG.aimbot_smooth)
+end
+
+local function hookSilentAim()
+    if not CONFIG.silent_aim then return end
+    if not UserInputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1) then return end
+    local target = getClosest(500, "HumanoidRootPart", true)
+    if not target then return end
+    State.silent_target = target
+    if State.silent_hooked then return end
+    State.silent_hooked = true
+    local mt = getrawmetatable(game)
+    local oldNC = mt.__namecall
+    setreadonly(mt, false)
+    mt.__namecall = newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if method == "FireServer" and typeof(self) == "Instance" and self:IsA("RemoteEvent") then
+            local args = {...}
+            local t = State.silent_target
+            if t then
+                for i, arg in ipairs(args) do
+                    if typeof(arg) == "Instance" and arg:IsA("BasePart") then
+                        args[i] = t
+                    elseif typeof(arg) == "Vector3" then
+                        args[i] = t.Position
                     end
+                end
+                return oldNC(self, unpack(args))
+            end
+        end
+        return oldNC(self, ...)
+    end)
+    setreadonly(mt, true)
+end
+
+local function autoDagger()
+    if not CONFIG.auto_dagger then return end
+    local now = tick()
+    if now - State.last_dagger < CONFIG.auto_dagger_cd then return end
+    local target = getClosest(CONFIG.auto_dagger_range, "HumanoidRootPart", true)
+    if not target then return end
+    local c = getChar()
+    local tool = c and c:FindFirstChildOfClass("Tool") or LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
+    if not tool then return end
+    pcall(function() tool:Activate() end)
+    for _, r in ipairs(RemoteCache) do
+        if r:IsA("RemoteEvent") then
+            local n = r.Name:lower()
+            if n:find("attack") or n:find("hit") or n:find("dagger") then
+                pcall(function() r:FireServer(target) end)
+            end
+        end
+    end
+    State.last_dagger = now
+end
+
+-- ================== AUTO SKILLCHECK ==================
+local function findSkillGui()
+    for _, root in ipairs({ LocalPlayer:FindFirstChild("PlayerGui"), game:GetService("CoreGui") }) do
+        if not root then continue end
+        for _, g in ipairs(root:GetDescendants()) do
+            if g:IsA("GuiObject") and g.Visible then
+                local n = g.Name:lower()
+                if n:find("skill") or n:find("check") or n:find("qte") then
+                    return g
                 end
             end
         end
-    end)
-    
-    if favorited > 0 then
-        print("[Auto Favorite] âœ… Complete! Favorited: " .. favorited)
     end
 end
 
-task.spawn(function()
-    while true do
-        task.wait(10)
-        if Config.AutoFavorite then
-            autoFavoriteByRarity()
+local function trySkillCheck()
+    local gui = findSkillGui()
+    if not gui then return false end
+    local zone, marker
+    for _, c in ipairs(gui:GetDescendants()) do
+        if c:IsA("Frame") or c:IsA("ImageLabel") then
+            local n = c.Name:lower()
+            if n:find("zone") or n:find("perfect") then zone = c
+            elseif n:find("marker") or n:find("pointer") then marker = c end
         end
     end
-end)
-
--- ====================================================================
---                     FISHING LOGIC (FROM YOUR test.lua)
--- ====================================================================
-local isFishing = false
-local fishingActive = false
-
--- Helper functions
-local function castRod()
-    pcall(function()
-        Events.equip:FireServer(1)
-        task.wait(0.05)
-        Events.charge:InvokeServer(1755848498.4834)
-        task.wait(0.02)
-        Events.minigame:InvokeServer(1.2854545116425, 1)
-        print("[Fishing] ðŸŽ£ Cast")
-    end)
-end
-
-local function reelIn()
-    pcall(function()
-        Events.fishing:FireServer()
-        print("[Fishing] âœ… Reel")
-    end)
-end
-
--- BLATANT MODE: Your exact implementation
-local function blatantFishingLoop()
-    while fishingActive and Config.BlatantMode do
-        if not isFishing then
-            isFishing = true
-            
-            -- Step 1: Rapid fire casts (2 parallel casts)
-            pcall(function()
-                Events.equip:FireServer(1)
-                task.wait(0.01)
-                
-                -- Cast 1
-                task.spawn(function()
-                    Events.charge:InvokeServer(1755848498.4834)
-                    task.wait(0.01)
-                    Events.minigame:InvokeServer(1.2854545116425, 1)
-                end)
-                
-                task.wait(0.05)
-                
-                -- Cast 2 (overlapping)
-                task.spawn(function()
-                    Events.charge:InvokeServer(1755848498.4834)
-                    task.wait(0.01)
-                    Events.minigame:InvokeServer(1.2854545116425, 1)
-                end)
-            end)
-            
-            -- Step 2: Wait for fish to bite
-            task.wait(Config.FishDelay)
-            
-            -- Step 3: Spam reel 5x to instant catch
-            for i = 1, 5 do
-                pcall(function() 
-                    Events.fishing:FireServer() 
-                end)
-                task.wait(0.01)
-            end
-            
-            -- Step 4: Short cooldown (50% faster)
-            task.wait(Config.CatchDelay * 0.5)
-            
-            isFishing = false
-            print("[Blatant] âš¡ Fast cycle")
-        else
-            task.wait(0.01)
-        end
+    local click = function()
+        local cx = gui.AbsolutePosition.X + gui.AbsoluteSize.X / 2
+        local cy = gui.AbsolutePosition.Y + gui.AbsoluteSize.Y / 2
+        pcall(function()
+            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, true, game, 0)
+            VirtualInputManager:SendMouseButtonEvent(cx, cy, 0, false, game, 0)
+        end)
     end
-end
-
--- NORMAL MODE: Your exact implementation
-local function normalFishingLoop()
-    while fishingActive and not Config.BlatantMode do
-        if not isFishing then
-            isFishing = true
-            
-            castRod()
-            task.wait(Config.FishDelay)
-            reelIn()
-            task.wait(Config.CatchDelay)
-            
-            isFishing = false
-        else
-            task.wait(0.1)
+    if zone and marker and CONFIG.skillcheck_perfect then
+        local zp = zone.AbsolutePosition.X
+        local zs = zone.AbsoluteSize.X
+        local mp = marker.AbsolutePosition.X
+        if mp >= zp and mp <= (zp + zs) then
+            click()
+            return true
         end
-    end
-end
-
--- Main fishing controller
-local function fishingLoop()
-    while fishingActive do
-        if Config.BlatantMode then
-            blatantFishingLoop()
-        else
-            normalFishingLoop()
-        end
-        task.wait(0.1)
-    end
-end
-
--- ====================================================================
---                     AUTO CATCH (SPAM SYSTEM)
--- ====================================================================
-task.spawn(function()
-    while true do
-        if Config.AutoCatch and not isFishing then
-            pcall(function() 
-                Events.fishing:FireServer() 
-            end)
-        end
-        task.wait(Config.CatchDelay)
-    end
-end)
-
--- ====================================================================
---                     AUTO SELL
--- ====================================================================
-local function simpleSell()
-    print("â•”â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•—")
-    print("[Auto Sell] ðŸ’° Selling all non-favorited items...")
-    
-    local sellSuccess = pcall(function()
-        return Events.sell:InvokeServer()
-    end)
-    
-    if sellSuccess then
-        print("[Auto Sell] âœ… SOLD! (Favorited fish kept safe)")
-        print("â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
     else
-        warn("[Auto Sell] âŒ Sell failed")
-        print("â•šâ•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•")
+        click()
+        return true
+    end
+    return false
+end
+
+-- ================== REMOTE FLOOD ==================
+-- *Efek lokal: bikin server lag sementara. Kamu mungkin di-kick duluan.*
+local function floodLoop()
+    if not CONFIG.flood_enabled then return end
+    local interval = 1 / CONFIG.flood_rate
+    for _, r in ipairs(RemoteCache) do
+        if r:IsA("RemoteEvent") then
+            pcall(function()
+                r:FireServer(math.random(), math.random(), "x" .. math.random(1e6))
+            end)
+        end
+    end
+    State.flood_count = State.flood_count + 1
+    task.wait(interval)
+end
+
+-- ================== VISUAL ==================
+local function applyVisual()
+    if CONFIG.full_bright then
+        Lighting.Brightness = 2
+        Lighting.ClockTime = 14
+        Lighting.GlobalShadows = false
+        Lighting.OutdoorAmbient = Color3.fromRGB(128,128,128)
+        Lighting.Ambient = Color3.fromRGB(178,178,178)
+    end
+    if CONFIG.no_fog then
+        Lighting.FogEnd = 100000
+        for _, v in ipairs(Lighting:GetChildren()) do
+            if v:IsA("Atmosphere") or v:IsA("Clouds") then
+                pcall(function() v.Parent = nil end)
+            end
+        end
     end
 end
 
-task.spawn(function()
-    while true do
-        task.wait(Config.SellDelay)
-        if Config.AutoSell then
-            simpleSell()
+-- ================== MOVEMENT ==================
+local function applyMovement()
+    local hum = getHum()
+    if hum then
+        hum.WalkSpeed = CONFIG.walk_speed
+        hum.JumpPower = CONFIG.jump_power
+        hum.UseJumpPower = true
+    end
+end
+
+-- ================== LOOPS ==================
+spawn(function() while task.wait(CONFIG.esp_refresh) do pcall(updateESP) end end)
+spawn(function()
+    RunService.RenderStepped:Connect(function()
+        pcall(aimbotLoop); pcall(hookSilentAim)
+    end)
+end)
+spawn(function()
+    while task.wait(0.1) do
+        pcall(autoDagger); pcall(applyMovement)
+    end
+end)
+spawn(function()
+    while task.wait(0.02) do
+        if CONFIG.auto_skillcheck then pcall(trySkillCheck) end
+    end
+end)
+spawn(function() while task.wait(1) do pcall(applyVisual) end end)
+spawn(function() while task.wait(0.03) do pcall(floodLoop) end end)
+spawn(function() while task.wait(30) do pcall(scanRemotes) end end)
+
+-- ================== LeoHUB UI ==================
+local LeoHUB = Instance.new("ScreenGui")
+LeoHUB.Name = "LeoHUB"
+LeoHUB.ResetOnSpawn = false
+LeoHUB.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+LeoHUB.Parent = LocalPlayer:WaitForChild("PlayerGui")
+
+local Main = Instance.new("Frame")
+Main.Size = UDim2.new(0, 560, 0, 440)
+Main.Position = UDim2.new(0.5, -280, 0.5, -220)
+Main.BackgroundColor3 = Color3.fromRGB(16, 16, 22)
+Main.BackgroundTransparency = 0.05
+Main.BorderSizePixel = 0
+Main.Parent = LeoHUB
+
+local MainCorner = Instance.new("UICorner")
+MainCorner.CornerRadius = UDim.new(0, 16)
+MainCorner.Parent = Main
+
+local MainStroke = Instance.new("UIStroke")
+MainStroke.Color = Color3.fromRGB(70, 60, 120)
+MainStroke.Thickness = 1.5
+MainStroke.Transparency = 0.3
+MainStroke.Parent = Main
+
+local Glow = Instance.new("ImageLabel")
+Glow.Size = UDim2.new(1, 40, 1, 40)
+Glow.Position = UDim2.new(0, -20, 0, -20)
+Glow.BackgroundTransparency = 1
+Glow.Image = "rbxassetid://5028857084"
+Glow.ImageColor3 = Color3.fromRGB(120, 80, 255)
+Glow.ImageTransparency = 0.75
+Glow.ZIndex = 0
+Glow.Parent = Main
+
+-- Header
+local Header = Instance.new("Frame")
+Header.Size = UDim2.new(1, 0, 0, 54)
+Header.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+Header.BorderSizePixel = 0
+Header.Parent = Main
+
+local HeaderCorner = Instance.new("UICorner")
+HeaderCorner.CornerRadius = UDim.new(0, 16)
+HeaderCorner.Parent = Header
+
+local HeaderCover = Instance.new("Frame")
+HeaderCover.Size = UDim2.new(1, 0, 0, 16)
+HeaderCover.Position = UDim2.new(0, 0, 1, -16)
+HeaderCover.BackgroundColor3 = Color3.fromRGB(22, 22, 32)
+HeaderCover.BorderSizePixel = 0
+HeaderCover.Parent = Header
+
+local Logo = Instance.new("TextLabel")
+Logo.Size = UDim2.new(0, 250, 0, 30)
+Logo.Position = UDim2.new(0, 20, 0, 6)
+Logo.BackgroundTransparency = 1
+Logo.Text = "LeoHUB"
+Logo.TextColor3 = Color3.fromRGB(255, 255, 255)
+Logo.TextXAlignment = Enum.TextXAlignment.Left
+Logo.Font = Enum.Font.GothamBlack
+Logo.TextSize = 26
+Logo.Parent = Header
+
+local LogoGradient = Instance.new("UIGradient")
+LogoGradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 100, 200)),
+    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(150, 100, 255)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 200, 255)),
+})
+LogoGradient.Parent = Logo
+
+local Subtitle = Instance.new("TextLabel")
+Subtitle.Size = UDim2.new(0, 300, 0, 14)
+Subtitle.Position = UDim2.new(0, 22, 0, 34)
+Subtitle.BackgroundTransparency = 1
+Subtitle.Text = "Exploit Edition • LeoXD"
+Subtitle.TextColor3 = Color3.fromRGB(120, 120, 140)
+Subtitle.TextXAlignment = Enum.TextXAlignment.Left
+Subtitle.Font = Enum.Font.GothamMedium
+Subtitle.TextSize = 11
+Subtitle.Parent = Header
+
+local CloseBtn = Instance.new("TextButton")
+CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+CloseBtn.Position = UDim2.new(1, -42, 0, 12)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
+CloseBtn.BorderSizePixel = 0
+CloseBtn.Text = "✕"
+CloseBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 14
+CloseBtn.Parent = Header
+
+local CloseC = Instance.new("UICorner")
+CloseC.CornerRadius = UDim.new(0, 8)
+CloseC.Parent = CloseBtn
+
+CloseBtn.MouseButton1Click:Connect(function() LeoHUB:Destroy() end)
+
+local MinBtn = Instance.new("TextButton")
+MinBtn.Size = UDim2.new(0, 30, 0, 30)
+MinBtn.Position = UDim2.new(1, -78, 0, 12)
+MinBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 58)
+MinBtn.BorderSizePixel = 0
+MinBtn.Text = "—"
+MinBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
+MinBtn.Font = Enum.Font.GothamBold
+MinBtn.TextSize = 14
+MinBtn.Parent = Header
+
+local MinC = Instance.new("UICorner")
+MinC.CornerRadius = UDim.new(0, 8)
+MinC.Parent = MinBtn
+
+-- Sidebar
+local Sidebar = Instance.new("Frame")
+Sidebar.Size = UDim2.new(0, 150, 1, -70)
+Sidebar.Position = UDim2.new(0, 0, 0, 54)
+Sidebar.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+Sidebar.BackgroundTransparency = 0.4
+Sidebar.BorderSizePixel = 0
+Sidebar.Parent = Main
+
+local SbCorner = Instance.new("UICorner")
+SbCorner.CornerRadius = UDim.new(0, 16)
+SbCorner.Parent = Sidebar
+
+local TabContainer = Instance.new("Frame")
+TabContainer.Size = UDim2.new(1, -20, 1, -20)
+TabContainer.Position = UDim2.new(0, 10, 0, 10)
+TabContainer.BackgroundTransparency = 1
+TabContainer.Parent = Sidebar
+
+local TabLayout = Instance.new("UIListLayout")
+TabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+TabLayout.Padding = UDim.new(0, 6)
+TabLayout.Parent = TabContainer
+
+-- Content
+local Content = Instance.new("Frame")
+Content.Size = UDim2.new(1, -170, 1, -74)
+Content.Position = UDim2.new(0, 160, 0, 64)
+Content.BackgroundTransparency = 1
+Content.Parent = Main
+
+local Pages = {}
+local CurrentTab = nil
+
+local function createPage(name)
+    local p = Instance.new("ScrollingFrame")
+    p.Size = UDim2.new(1, 0, 1, 0)
+    p.BackgroundTransparency = 1
+    p.BorderSizePixel = 0
+    p.ScrollBarThickness = 4
+    p.ScrollBarImageColor3 = Color3.fromRGB(90, 80, 150)
+    p.CanvasSize = UDim2.new(0, 0, 0, 0)
+    p.Visible = false
+    p.Parent = Content
+    local l = Instance.new("UIListLayout")
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    l.Padding = UDim.new(0, 8)
+    l.Parent = p
+    local pad = Instance.new("UIPadding")
+    pad.PaddingTop = UDim.new(0, 4)
+    pad.PaddingLeft = UDim.new(0, 4)
+    pad.PaddingRight = UDim.new(0, 8)
+    pad.Parent = p
+    l:GetPropertyChangedSignal("AbsoluteContentSize"):Connect(function()
+        p.CanvasSize = UDim2.new(0, 0, 0, l.AbsoluteContentSize.Y + 12)
+    end)
+    Pages[name] = p
+end
+
+local function createTab(name, icon)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, 0, 0, 36)
+    b.BackgroundColor3 = Color3.fromRGB(30, 30, 42)
+    b.BackgroundTransparency = 1
+    b.BorderSizePixel = 0
+    b.Text = "   " .. (icon or "") .. "   " .. name
+    b.TextColor3 = Color3.fromRGB(160, 160, 180)
+    b.TextXAlignment = Enum.TextXAlignment.Left
+    b.Font = Enum.Font.GothamMedium
+    b.TextSize = 13
+    b.AutoButtonColor = false
+    b.Parent = TabContainer
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 8)
+    c.Parent = b
+    b.MouseEnter:Connect(function()
+        if CurrentTab ~= name then
+            TweenService:Create(b, TweenInfo.new(0.15), {
+                BackgroundTransparency = 0.6,
+                BackgroundColor3 = Color3.fromRGB(50, 45, 80)
+            }):Play()
+        end
+    end)
+    b.MouseLeave:Connect(function()
+        if CurrentTab ~= name then
+            TweenService:Create(b, TweenInfo.new(0.15), { BackgroundTransparency = 1 }):Play()
+        end
+    end)
+    b.MouseButton1Click:Connect(function()
+        for _, p in pairs(Pages) do p.Visible = false end
+        for _, t in pairs(TabContainer:GetChildren()) do
+            if t:IsA("TextButton") then
+                TweenService:Create(t, TweenInfo.new(0.15), {
+                    BackgroundTransparency = 1,
+                    TextColor3 = Color3.fromRGB(160, 160, 180)
+                }):Play()
+            end
+        end
+        Pages[name].Visible = true
+        TweenService:Create(b, TweenInfo.new(0.15), {
+            BackgroundTransparency = 0.2,
+            BackgroundColor3 = Color3.fromRGB(80, 60, 150),
+            TextColor3 = Color3.fromRGB(255, 255, 255)
+        }):Play()
+        CurrentTab = name
+    end)
+    createPage(name)
+end
+
+-- Components
+local function section(parent, title)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, 0, 0, 24)
+    l.BackgroundTransparency = 1
+    l.Text = title
+    l.TextColor3 = Color3.fromRGB(160, 140, 255)
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.Font = Enum.Font.GothamBold
+    l.TextSize = 12
+    l.Parent = parent
+end
+
+local function toggle(parent, label, key, cb)
+    local r = Instance.new("Frame")
+    r.Size = UDim2.new(1, 0, 0, 38)
+    r.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
+    r.BackgroundTransparency = 0.3
+    r.BorderSizePixel = 0
+    r.Parent = parent
+    local rc = Instance.new("UICorner")
+    rc.CornerRadius = UDim.new(0, 8)
+    rc.Parent = r
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(0.6, 0, 1, 0)
+    l.Position = UDim2.new(0, 14, 0, 0)
+    l.BackgroundTransparency = 1
+    l.Text = label
+    l.TextColor3 = Color3.fromRGB(230, 230, 240)
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.Font = Enum.Font.GothamMedium
+    l.TextSize = 13
+    l.Parent = r
+    local tg = Instance.new("Frame")
+    tg.Size = UDim2.new(0, 42, 0, 22)
+    tg.Position = UDim2.new(1, -54, 0.5, -11)
+    tg.BackgroundColor3 = CONFIG[key] and Color3.fromRGB(130, 90, 255) or Color3.fromRGB(50, 50, 68)
+    tg.BorderSizePixel = 0
+    tg.Parent = r
+    local tc = Instance.new("UICorner")
+    tc.CornerRadius = UDim.new(1, 0)
+    tc.Parent = tg
+    local k = Instance.new("Frame")
+    k.Size = UDim2.new(0, 16, 0, 16)
+    k.Position = CONFIG[key] and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+    k.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    k.BorderSizePixel = 0
+    k.Parent = tg
+    local kc = Instance.new("UICorner")
+    kc.CornerRadius = UDim.new(1, 0)
+    kc.Parent = k
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundTransparency = 1
+    btn.Text = ""
+    btn.Parent = r
+    btn.MouseButton1Click:Connect(function()
+        CONFIG[key] = not CONFIG[key]
+        TweenService:Create(tg, TweenInfo.new(0.2), {
+            BackgroundColor3 = CONFIG[key] and Color3.fromRGB(130, 90, 255) or Color3.fromRGB(50, 50, 68)
+        }):Play()
+        TweenService:Create(k, TweenInfo.new(0.2), {
+            Position = CONFIG[key] and UDim2.new(1, -19, 0.5, -8) or UDim2.new(0, 3, 0.5, -8)
+        }):Play()
+        if cb then cb(CONFIG[key]) end
+    end)
+end
+
+local function slider(parent, label, key, min, max)
+    local r = Instance.new("Frame")
+    r.Size = UDim2.new(1, 0, 0, 56)
+    r.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
+    r.BackgroundTransparency = 0.3
+    r.BorderSizePixel = 0
+    r.Parent = parent
+    local rc = Instance.new("UICorner")
+    rc.CornerRadius = UDim.new(0, 8)
+    rc.Parent = r
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(0.7, 0, 0, 20)
+    l.Position = UDim2.new(0, 14, 0, 6)
+    l.BackgroundTransparency = 1
+    l.Text = label
+    l.TextColor3 = Color3.fromRGB(230, 230, 240)
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.Font = Enum.Font.GothamMedium
+    l.TextSize = 13
+    l.Parent = r
+    local vl = Instance.new("TextLabel")
+    vl.Size = UDim2.new(0.3, -14, 0, 20)
+    vl.Position = UDim2.new(0.7, 0, 0, 6)
+    vl.BackgroundTransparency = 1
+    vl.Text = tostring(CONFIG[key])
+    vl.TextColor3 = Color3.fromRGB(160, 140, 255)
+    vl.TextXAlignment = Enum.TextXAlignment.Right
+    vl.Font = Enum.Font.GothamBold
+    vl.TextSize = 13
+    vl.Parent = r
+    local bg = Instance.new("Frame")
+    bg.Size = UDim2.new(1, -28, 0, 6)
+    bg.Position = UDim2.new(0, 14, 0, 38)
+    bg.BackgroundColor3 = Color3.fromRGB(45, 45, 62)
+    bg.BorderSizePixel = 0
+    bg.Parent = r
+    local bc = Instance.new("UICorner")
+    bc.CornerRadius = UDim.new(1, 0)
+    bc.Parent = bg
+    local f = Instance.new("Frame")
+    local pct = (CONFIG[key] - min) / (max - min)
+    f.Size = UDim2.new(pct, 0, 1, 0)
+    f.BackgroundColor3 = Color3.fromRGB(140, 100, 255)
+    f.BorderSizePixel = 0
+    f.Parent = bg
+    local fc = Instance.new("UICorner")
+    fc.CornerRadius = UDim.new(1, 0)
+    fc.Parent = f
+    local dragging = false
+    local function update(x)
+        local rel = math.clamp((x - bg.AbsolutePosition.X) / bg.AbsoluteSize.X, 0, 1)
+        local val = math.floor(min + (max - min) * rel)
+        CONFIG[key] = val
+        vl.Text = tostring(val)
+        f.Size = UDim2.new(rel, 0, 1, 0)
+    end
+    bg.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            update(i.Position.X)
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(i)
+        if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            update(i.Position.X)
+        end
+    end)
+    UserInputService.InputEnded:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+end
+
+local function button(parent, label, cb)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(1, 0, 0, 38)
+    b.BackgroundColor3 = Color3.fromRGB(70, 55, 130)
+    b.BorderSizePixel = 0
+    b.Text = label
+    b.TextColor3 = Color3.fromRGB(255, 255, 255)
+    b.Font = Enum.Font.GothamBold
+    b.TextSize = 13
+    b.AutoButtonColor = false
+    b.Parent = parent
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 8)
+    c.Parent = b
+    b.MouseEnter:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(95, 75, 180) }):Play()
+    end)
+    b.MouseLeave:Connect(function()
+        TweenService:Create(b, TweenInfo.new(0.15), { BackgroundColor3 = Color3.fromRGB(70, 55, 130) }):Play()
+    end)
+    b.MouseButton1Click:Connect(cb)
+end
+
+local function textbox(parent, placeholder, cb)
+    local box = Instance.new("TextBox")
+    box.Size = UDim2.new(1, 0, 0, 36)
+    box.BackgroundColor3 = Color3.fromRGB(28, 28, 40)
+    box.BorderSizePixel = 0
+    box.Text = ""
+    box.PlaceholderText = placeholder
+    box.PlaceholderColor3 = Color3.fromRGB(110, 110, 130)
+    box.TextColor3 = Color3.fromRGB(230, 230, 240)
+    box.Font = Enum.Font.GothamMedium
+    box.TextSize = 13
+    box.ClearTextOnFocus = false
+    box.Parent = parent
+    local c = Instance.new("UICorner")
+    c.CornerRadius = UDim.new(0, 8)
+    c.Parent = box
+    box.FocusLost:Connect(function(enter)
+        if enter and cb then cb(box.Text) end
+    end)
+end
+
+-- Build Tabs
+createTab("Movement", "🏃")
+createTab("Visual", "👁")
+createTab("Combat", "⚔")
+createTab("Exploit", "💥")
+createTab("Map", "🗺")
+createTab("Misc", "⚙")
+
+-- ============ MOVEMENT TAB ============
+section(Pages["Movement"], "SPEED & JUMP")
+slider(Pages["Movement"], "Walk Speed", "walk_speed", 16, 300)
+slider(Pages["Movement"], "Jump Power", "jump_power", 50, 500)
+toggle(Pages["Movement"], "Infinite Jump", "infinite_jump")
+section(Pages["Movement"], "FLY")
+toggle(Pages["Movement"], "Fly (WASD + Space/LCtrl)", "fly_enabled", function(s) toggleFly(s) end)
+slider(Pages["Movement"], "Fly Speed", "fly_speed", 20, 300)
+section(Pages["Movement"], "NOCLIP")
+toggle(Pages["Movement"], "Noclip", "noclip_enabled", function(s) toggleNoclip(s) end)
+
+-- ============ VISUAL TAB ============
+section(Pages["Visual"], "ESP")
+toggle(Pages["Visual"], "ESP Enabled", "esp_enabled")
+section(Pages["Visual"], "LIGHTING")
+toggle(Pages["Visual"], "Full Bright", "full_bright")
+toggle(Pages["Visual"], "No Fog", "no_fog")
+
+-- ============ COMBAT TAB ============
+section(Pages["Combat"], "AIMBOT")
+toggle(Pages["Combat"], "Aimbot (Hold RMB)", "aimbot_enabled")
+slider(Pages["Combat"], "FOV", "aimbot_fov", 50, 800)
+slider(Pages["Combat"], "Smoothness x100", "aimbot_smooth", 5, 100)
+section(Pages["Combat"], "SILENT AIM")
+toggle(Pages["Combat"], "Silent Aim (Hold LMB)", "silent_aim")
+section(Pages["Combat"], "AUTO ATTACK")
+toggle(Pages["Combat"], "Auto Dagger", "auto_dagger")
+slider(Pages["Combat"], "Range", "auto_dagger_range", 5, 50)
+section(Pages["Combat"], "SKILLCHECK")
+toggle(Pages["Combat"], "Auto SkillCheck", "auto_skillcheck")
+toggle(Pages["Combat"], "Perfect Zone Only", "skillcheck_perfect")
+
+-- ============ EXPLOIT TAB ============
+section(Pages["Exploit"], "REMOTE FLOOD")
+-- *Catatan: efek lokal, bukan DDoS. Kamu mungkin di-kick.*
+toggle(Pages["Exploit"], "Enable Flood", "flood_enabled")
+slider(Pages["Exploit"], "Flood Rate (pkt/s)", "flood_rate", 1, 60)
+section(Pages["Exploit"], "SPAWN ITEM")
+textbox(Pages["Exploit"], "Item name (misal: Gun, Sword)", function(txt)
+    if txt and #txt > 0 then spawnItem(txt) end
+end)
+button(Pages["Exploit"], "Rescan Remotes", function() scanRemotes() end)
+
+-- ============ MAP TAB ============
+section(Pages["Map"], "MAP TOOLS")
+button(Pages["Map"], "Dump Map Structure (JSON)", function() copyMap() end)
+button(Pages["Map"], "Teleport to Player...", function()
+    notify("LeoHUB", "Gunakan textbox di bawah")
+end)
+textbox(Pages["Map"], "Player name untuk teleport", function(txt)
+    if txt and #txt > 0 then
+        if teleportToPlayer(txt) then
+            notify("LeoHUB", "Teleported to " .. txt)
+        else
+            notify("LeoHUB", "Player not found: " .. txt)
         end
     end
 end)
 
--- ====================================================================
---                     RAYFIELD UI
--- ====================================================================
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
-
-local Window = Rayfield:CreateWindow({
-    Name = "ðŸŽ£ Auto Fish V4.0",
-    LoadingTitle = "Ultra-Fast Fishing",
-    LoadingSubtitle = "Working Method Implementation",
-    ConfigurationSaving = {
-        Enabled = false
-    }
-})
-
--- ====== MAIN TAB ======
-local MainTab = Window:CreateTab("ðŸ  Main", 4483362458)
-
-MainTab:CreateSection("Auto Fishing")
-
-local BlatantToggle = MainTab:CreateToggle({
-    Name = "âš¡ BLATANT MODE (3x Faster!)",
-    CurrentValue = Config.BlatantMode,
-    Callback = function(value)
-        Config.BlatantMode = value
-        print("[Blatant Mode] " .. (value and "âš¡ ENABLED - SUPER FAST!" or "ðŸ”´ Disabled - Normal speed"))
-        saveConfig()
-    end
-})
-
-local AutoFishToggle = MainTab:CreateToggle({
-    Name = "ðŸ¤– Auto Fish",
-    CurrentValue = Config.AutoFish,
-    Callback = function(value)
-        Config.AutoFish = value
-        fishingActive = value
-        
-        if value then
-            print("[Auto Fish] ðŸŸ¢ Started " .. (Config.BlatantMode and "(BLATANT MODE)" or "(Normal)"))
-            task.spawn(fishingLoop)
-        else
-            print("[Auto Fish] ðŸ”´ Stopped")
-            pcall(function() Events.unequip:FireServer() end)
-        end
-        
-        saveConfig()
-    end
-})
-
-local AutoCatchToggle = MainTab:CreateToggle({
-    Name = "ðŸŽ¯ Auto Catch (Extra Speed)",
-    CurrentValue = Config.AutoCatch,
-    Callback = function(value)
-        Config.AutoCatch = value
-        print("[Auto Catch] " .. (value and "ðŸŸ¢ Enabled" or "ðŸ”´ Disabled"))
-        saveConfig()
-    end
-})
-
-MainTab:CreateInput({
-    Name = "Fish Delay (seconds)",
-    PlaceholderText = "Default: 0.9",
-    RemoveTextAfterFocusLost = false,
-    Callback = function(value)
-        local num = tonumber(value)
-        if num and num >= 0.1 and num <= 10 then
-            Config.FishDelay = num
-            print("[Config] âœ… Fish delay set to " .. num .. "s")
-            saveConfig()
-        else
-            warn("[Config] âŒ Invalid delay (must be 0.1-10)")
+-- ============ MISC TAB ============
+section(Pages["Misc"], "AVATAR")
+button(Pages["Misc"], "Copy Avatar (Nearest)", function()
+    local closest, cd = nil, 500
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p == LocalPlayer then continue end
+        local c = p.Character
+        if c and c:FindFirstChild("HumanoidRootPart") and LocalPlayer.Character
+           and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+            local d = (c.HumanoidRootPart.Position - LocalPlayer.Character.HumanoidRootPart.Position).Magnitude
+            if d < cd then closest = p; cd = d end
         end
     end
-})
+    if closest then copyAvatar(closest) end
+end)
+section(Pages["Misc"], "INFO")
+button(Pages["Misc"], "Rescan Remotes", function() scanRemotes() end)
+button(Pages["Misc"], "Destroy LeoHUB", function() LeoHUB:Destroy() end)
 
-MainTab:CreateInput({
-    Name = "Catch Delay (seconds)",
-    PlaceholderText = "Default: 0.2",
-    RemoveTextAfterFocusLost = false,
-    Callback = function(value)
-        local num = tonumber(value)
-        if num and num >= 0.1 and num <= 10 then
-            Config.CatchDelay = num
-            print("[Config] âœ… Catch delay set to " .. num .. "s")
-            saveConfig()
-        else
-            warn("[Config] âŒ Invalid delay (must be 0.1-10)")
-        end
+-- Default tab
+for _, t in ipairs(TabContainer:GetChildren()) do
+    if t:IsA("TextButton") and t.Name:find("Movement") then
+        t.BackgroundTransparency = 0.2
+        t.BackgroundColor3 = Color3.fromRGB(80, 60, 150)
+        t.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Pages["Movement"].Visible = true
+        CurrentTab = "Movement"
     end
+end
+
+-- Drag
+local dragging, dragStart, startPos
+Header.InputBegan:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = i.Position
+        startPos = Main.Position
+    end
+end)
+UserInputService.InputChanged:Connect(function(i)
+    if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+        local d = i.Position - dragStart
+        Main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+    end
+end)
+UserInputService.InputEnded:Connect(function(i)
+    if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+-- Minimize
+local minimized = false
+local MiniBtn = Instance.new("TextButton")
+MiniBtn.Size = UDim2.new(0, 130, 0, 38)
+MiniBtn.Position = UDim2.new(0, 20, 0, 20)
+MiniBtn.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+MiniBtn.BorderSizePixel = 0
+MiniBtn.Text = "LeoHUB"
+MiniBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+MiniBtn.Font = Enum.Font.GothamBlack
+MiniBtn.TextSize = 16
+MiniBtn.Visible = false
+MiniBtn.Parent = LeoHUB
+
+local mc = Instance.new("UICorner")
+mc.CornerRadius = UDim.new(0, 10)
+mc.Parent = MiniBtn
+
+local mg = Instance.new("UIGradient")
+mg.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 100, 200)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 200, 255)),
 })
+mg.Parent = MiniBtn
 
-MainTab:CreateSection("Auto Sell")
+MiniBtn.MouseButton1Click:Connect(function()
+    minimized = false
+    MiniBtn.Visible = false
+    Main.Visible = true
+end)
 
-local AutoSellToggle = MainTab:CreateToggle({
-    Name = "ðŸ’° Auto Sell (Keeps Favorited)",
-    
+MinBtn.MouseButton1Click:Connect(function()
+    minimized = true
+    MiniBtn.Visible = true
+    Main.Visible = false
+end)
+
+UserInputService.InputBegan:Connect(function(input, gp)
+    if gp then return end
+    if input.KeyCode == Enum.KeyCode.RightShift then
+        minimized = not minimized
+        Main.Visible = not minimized
+        MiniBtn.Visible = minimized
+    end
+end)
+
+-- ================== DONE ==================
+notify("LeoHUB", "Exploit Edition loaded. RightShift to minimize.")
+print("[LeoHUB] Exploit Edition loaded — LeoXD")
